@@ -10,7 +10,7 @@ const server = http.createServer(app);
 
 // Basic health check route
 app.get('/', (req, res) => {
-  res.send('Universe Signaling Server is running smoothly!');
+  res.send('Universe Signaling Server Successfully Runs!');
 });
 
 const io = new Server(server, {
