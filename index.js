@@ -237,7 +237,21 @@ const io = new Server(server, {
 });
 
 let waitingUsers = {};
-let onlineUsers = {}; 
+let onlineUsers = {};
+let topicUsers = {}; // { topic: Set of socket.id }
+
+const getRoomCounts = () => {
+  const counts = {};
+  for (const topic in topicUsers) {
+    counts[topic] = topicUsers[topic].size;
+  }
+  return counts;
+};
+
+// API: Get live room counts
+app.get('/api/rooms/stats', (req, res) => {
+  res.json(getRoomCounts());
+});
 
 io.on('connection', (socket) => {
   socket.on('register', (userId) => {
@@ -250,8 +264,21 @@ io.on('connection', (socket) => {
     const userInfo = data.userInfo || data;
     const topic = data.topic || 'global';
     
+    // Remove from previous topic if switching
+    if (socket.currentTopic && socket.currentTopic !== topic) {
+      if (topicUsers[socket.currentTopic]) {
+        topicUsers[socket.currentTopic].delete(socket.id);
+      }
+    }
+
     socket.userInfo = userInfo;
     socket.currentTopic = topic;
+
+    // Add to new topic set
+    if (!topicUsers[topic]) topicUsers[topic] = new Set();
+    topicUsers[topic].add(socket.id);
+
+    io.emit('room_counts_update', getRoomCounts());
     
     if (!waitingUsers[topic]) waitingUsers[topic] = [];
     
@@ -280,6 +307,14 @@ io.on('connection', (socket) => {
   socket.on('ice_candidate', (data) => socket.to(data.room).emit('ice_candidate', data.candidate));
   socket.on('chat_message', (data) => socket.to(data.room).emit('chat_message', data.message));
   socket.on('leave_room', (room) => { socket.leave(room); socket.to(room).emit('partner_left'); });
+  
+  socket.on('leave_topic', () => {
+    if (socket.currentTopic && topicUsers[socket.currentTopic]) {
+      topicUsers[socket.currentTopic].delete(socket.id);
+      socket.currentTopic = null;
+      io.emit('room_counts_update', getRoomCounts());
+    }
+  });
 
   socket.on('send_friend_request', ({ fromUser, toId }) => {
     const targetSocket = onlineUsers[toId];
@@ -303,7 +338,11 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnecting', () => {
-    if (socket.currentTopic && waitingUsers[socket.currentTopic]) {
+    if (socket.currentTopic && topicUsers[socket.currentTopic]) {
+      topicUsers[socket.currentTopic].delete(socket.id);
+      io.emit('room_counts_update', getRoomCounts());
+    }
+    if (waitingUsers[socket.currentTopic]) {
       waitingUsers[socket.currentTopic] = waitingUsers[socket.currentTopic].filter(u => u !== socket.id);
     }
     socket.rooms.forEach(room => {
