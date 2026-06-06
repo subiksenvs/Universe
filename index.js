@@ -279,10 +279,15 @@ app.get('/api/rooms/stats', (req, res) => {
 
 io.on('connection', (socket) => {
   socket.on('register', (userId) => {
+    console.log(`[REGISTER] User ${userId} registered with socket ${socket.id}`);
     onlineUsers[userId] = socket.id;
     socket.userId = userId;
     io.emit('user_status_change', { userId, status: 'online' });
   });
+
+  setInterval(() => {
+    console.log(`[DEBUG] Online Users: ${Object.keys(onlineUsers).length}`);
+  }, 10000);
 
   socket.on('join_queue', (data) => {
     const userInfo = data.userInfo || data;
@@ -347,10 +352,13 @@ io.on('connection', (socket) => {
 
   // --- Private Call Events ---
   socket.on('request_call', ({ toId, fromInfo }) => {
+    console.log(`[CALL] User ${fromInfo.id} is requesting to call ${toId}`);
     const targetSocket = onlineUsers[toId];
     if (targetSocket) {
+      console.log(`[CALL] Found target socket for ${toId}. Emitting incoming_call.`);
       io.to(targetSocket).emit('incoming_call', { callerId: fromInfo.id, callerInfo: fromInfo });
     } else {
+      console.log(`[CALL] Target user ${toId} is offline. Target socket not found.`);
       socket.emit('call_error', { error: 'User is offline' });
     }
   });
