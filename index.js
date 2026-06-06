@@ -139,8 +139,12 @@ app.post('/api/friends/request', async (req, res) => {
     const toUser = await User.findById(toId);
     
     if (!toUser) return res.status(404).json({ error: 'User not found' });
-    if (toUser.friends.includes(fromId)) return res.status(400).json({ error: 'Already friends' });
-    if (toUser.friendRequests.includes(fromId)) return res.status(400).json({ error: 'Request already sent' });
+    
+    const isFriend = toUser.friends.some(id => id.toString() === fromId);
+    if (isFriend) return res.status(400).json({ error: 'Already friends' });
+    
+    const isRequested = toUser.friendRequests.some(id => id.toString() === fromId);
+    if (isRequested) return res.status(400).json({ error: 'Request already sent' });
 
     toUser.friendRequests.push(fromId);
     await toUser.save();
@@ -182,6 +186,26 @@ app.post('/api/friends/reject', async (req, res) => {
     await toUser.save();
 
     res.json({ success: true, friendRequests: toUser.friendRequests });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/friends/remove', async (req, res) => {
+  try {
+    const { fromId, toId } = req.body;
+    const toUser = await User.findById(toId);
+    const fromUser = await User.findById(fromId);
+
+    if (!toUser || !fromUser) return res.status(404).json({ error: 'User not found' });
+
+    toUser.friends = toUser.friends.filter(id => id.toString() !== fromId);
+    fromUser.friends = fromUser.friends.filter(id => id.toString() !== toId);
+
+    await toUser.save();
+    await fromUser.save();
+
+    res.json({ success: true, friends: fromUser.friends });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -320,6 +344,51 @@ io.on('connection', (socket) => {
     const targetSocket = onlineUsers[toId];
     if (targetSocket) io.to(targetSocket).emit('receive_friend_request', { fromUser });
   });
+
+  // --- Private Call Events ---
+  socket.on('request_call', ({ toId, fromInfo }) => {
+    const targetSocket = onlineUsers[toId];
+    if (targetSocket) {
+      io.to(targetSocket).emit('incoming_call', { callerId: fromInfo.id, callerInfo: fromInfo });
+    } else {
+      socket.emit('call_error', { error: 'User is offline' });
+    }
+  });
+
+  socket.on('accept_call', ({ toId, fromInfo }) => {
+    const targetSocket = onlineUsers[toId];
+    if (targetSocket) {
+      // Create a unique room name
+      const roomId = `private-${[toId, fromInfo.id].sort().join('-')}`;
+      
+      // Notify both parties that the call is starting
+      io.to(targetSocket).emit('call_started', { roomId, partnerInfo: fromInfo });
+      socket.emit('call_started', { roomId, partnerInfo: { id: toId } }); // We'll rely on the frontend to know who they accepted
+    }
+  });
+
+  socket.on('reject_call', ({ toId }) => {
+    const targetSocket = onlineUsers[toId];
+    if (targetSocket) {
+      io.to(targetSocket).emit('call_rejected');
+    }
+  });
+
+  socket.on('join_private_room', ({ roomId, userInfo }) => {
+    const room = io.sockets.adapter.rooms.get(roomId);
+    const numClients = room ? room.size : 0;
+    
+    if (numClients === 0) {
+      socket.join(roomId);
+      socket.emit('private_room_joined', { isInitiator: true });
+    } else if (numClients === 1) {
+      socket.join(roomId);
+      socket.emit('private_room_joined', { isInitiator: false });
+    } else {
+      socket.emit('call_error', { error: 'Room is full' });
+    }
+  });
+  // ---------------------------
 
   socket.on('send_direct_message', async (data) => {
     const { senderId, receiverId, message, timestamp } = data;
